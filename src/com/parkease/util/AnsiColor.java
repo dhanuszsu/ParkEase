@@ -1,40 +1,14 @@
 package com.parkease.util;
 
-/**
- * Utility providing ANSI escape codes for professional, rich CLI rendering.
- */
 public class AnsiColor {
     public static final String RESET = "\u001B[0m";
     public static final String BOLD = "\u001B[1m";
     public static final String DIM = "\u001B[2m";
-    public static final String UNDERLINE = "\u001B[4m";
 
-    // Regular Colors
-    public static final String BLACK = "\u001B[30m";
-    public static final String RED = "\u001B[31m";
-    public static final String GREEN = "\u001B[32m";
-    public static final String YELLOW = "\u001B[33m";
-    public static final String BLUE = "\u001B[34m";
-    public static final String MAGENTA = "\u001B[35m";
-    public static final String CYAN = "\u001B[36m";
-    public static final String WHITE = "\u001B[37m";
-
-    // Bright Colors
-    public static final String BRIGHT_RED = "\u001B[91m";
-    public static final String BRIGHT_GREEN = "\u001B[92m";
-    public static final String BRIGHT_YELLOW = "\u001B[93m";
-    public static final String BRIGHT_BLUE = "\u001B[94m";
-    public static final String BRIGHT_MAGENTA = "\u001B[95m";
-    public static final String BRIGHT_CYAN = "\u001B[96m";
-    public static final String BRIGHT_WHITE = "\u001B[97m";
-
-    // Backgrounds
-    public static final String BG_GREEN = "\u001B[42m";
-    public static final String BG_YELLOW = "\u001B[43m";
-    public static final String BG_BLUE = "\u001B[44m";
-    public static final String BG_MAGENTA = "\u001B[45m";
-    public static final String BG_CYAN = "\u001B[46m";
-    public static final String BG_DARK_GRAY = "\u001B[100m";
+    public static final String ORANGE = "\u001B[38;2;217;119;87m";
+    public static final String MUTED_ORANGE = "\u001B[38;2;180;100;75m";
+    public static final String WHITE = "\u001B[97m";
+    public static final String GRAY = "\u001B[90m";
 
     private static boolean enabled = true;
 
@@ -42,21 +16,79 @@ public class AnsiColor {
         enabled = isEnabled;
     }
 
-    public static boolean isEnabled() {
-        return enabled;
-    }
-
     public static String color(String code, String text) {
         if (!enabled) return text;
         return code + text + RESET;
     }
 
-    public static String green(String text) { return color(BRIGHT_GREEN, text); }
-    public static String red(String text) { return color(BRIGHT_RED, text); }
-    public static String yellow(String text) { return color(BRIGHT_YELLOW, text); }
-    public static String blue(String text) { return color(BRIGHT_BLUE, text); }
-    public static String magenta(String text) { return color(BRIGHT_MAGENTA, text); }
-    public static String cyan(String text) { return color(BRIGHT_CYAN, text); }
+    public static String orange(String text) { return color(ORANGE, text); }
+    public static String mutedOrange(String text) { return color(MUTED_ORANGE, text); }
+    public static String white(String text) { return color(WHITE, text); }
+    public static String gray(String text) { return color(GRAY, text); }
     public static String bold(String text) { return color(BOLD, text); }
-    public static String white(String text) { return color(BRIGHT_WHITE, text); }
+    public static String dim(String text) { return color(DIM, text); }
+
+    public static String green(String text) { return color(WHITE, text); }
+    public static String red(String text) { return color(ORANGE, text); }
+    public static String yellow(String text) { return color(ORANGE, text); }
+    public static String blue(String text) { return color(WHITE, text); }
+    public static String magenta(String text) { return color(ORANGE, text); }
+    public static String cyan(String text) { return color(ORANGE, text); }
+    public static String lightOrange(String text) { return color(ORANGE, text); }
+
+    public static String orangeGradientText(String text) {
+        if (!enabled) return text;
+        String[] shades = {
+            "\u001B[38;2;190;95;65m",
+            "\u001B[38;2;217;119;87m",
+            "\u001B[38;2;235;135;105m",
+            "\u001B[38;2;217;119;87m",
+            "\u001B[38;2;190;95;65m"
+        };
+        StringBuilder sb = new StringBuilder();
+        int len = text.length();
+        for (int i = 0; i < len; i++) {
+            int idx = (int) (((double) i / len) * shades.length);
+            if (idx >= shades.length) idx = shades.length - 1;
+            sb.append(shades[idx]).append(text.charAt(i));
+        }
+        sb.append(RESET);
+        return sb.toString();
+    }
+
+    public static String gradientText(String text) {
+        return orangeGradientText(text);
+    }
+
+    public static void showSpinner(String message, int durationMs) {
+        char[] spinner = {'⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'};
+        int steps = durationMs / 80;
+        for (int i = 0; i < steps; i++) {
+            char frame = spinner[i % spinner.length];
+            System.out.print("\r" + orange(String.valueOf(frame)) + " " + white(message));
+            System.out.flush();
+            try {
+                Thread.sleep(80);
+            } catch (InterruptedException ignored) {}
+        }
+        System.out.print("\r" + orange("✔") + " " + white(message) + " " + orange("[DONE]\n"));
+        System.out.flush();
+    }
+
+    public static void showProgressBar(String taskName, int durationMs) {
+        int totalBars = 30;
+        int steps = durationMs / 40;
+        for (int i = 0; i <= steps; i++) {
+            double percent = (double) i / steps;
+            int filled = (int) (percent * totalBars);
+            int empty = totalBars - filled;
+            String bar = "█".repeat(filled) + "░".repeat(empty);
+            System.out.print("\r" + orange(taskName) + " [" + orangeGradientText(bar) + orange(String.format("] %3.0f%%", percent * 100)));
+            System.out.flush();
+            try {
+                Thread.sleep(40);
+            } catch (InterruptedException ignored) {}
+        }
+        System.out.println();
+    }
 }

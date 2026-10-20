@@ -2,18 +2,21 @@ package com.parkease.model;
 
 import java.time.LocalDateTime;
 
-/**
- * Concrete subclass representing a Heavy Vehicle / Truck.
- * Consumes 2 consecutive slots.
- * Hourly rate: Rs. 100/hr, Daily Cap: Rs. 600.
- */
 public class Truck extends Vehicle {
 
     public Truck(String plateNumber) {
-        this(plateNumber, LocalDateTime.now());
+        this(plateNumber, "N/A", LocalDateTime.now());
+    }
+
+    public Truck(String plateNumber, String ownerName) {
+        this(plateNumber, ownerName, LocalDateTime.now());
     }
 
     public Truck(String plateNumber, LocalDateTime entryTime) {
-        super(plateNumber, VehicleType.TRUCK, entryTime);
+        this(plateNumber, "N/A", entryTime);
+    }
+
+    public Truck(String plateNumber, String ownerName, LocalDateTime entryTime) {
+        super(plateNumber, ownerName, VehicleType.TRUCK, entryTime);
     }
 }

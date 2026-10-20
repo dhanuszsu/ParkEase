@@ -111,11 +111,11 @@ classDiagram
 
 ## 🚗 Vehicle Specifications & Pricing Rules
 
-| Vehicle Type | Slots Required | Hourly Rate | 24-Hour Daily Cap | Allocation Behavior |
+| Vehicle Type | Slots Required | Hourly Rate | 24-Hour Daily Cap (8h Max) | Allocation Behavior |
 | :--- | :---: | :---: | :---: | :--- |
-| **Bike** (`BIKE`) | 1 Slot | **Rs. 20 / hr** | **Rs. 100 / day** | First available vacant slot |
-| **Car** (`CAR`) | 1 Slot | **Rs. 40 / hr** | **Rs. 250 / day** | First available vacant slot |
-| **Truck** (`TRUCK`) | **2 Consecutive Slots** | **Rs. 100 / hr** | **Rs. 600 / day** | Must occupy 2 adjacent contiguous vacant slots (e.g. `[S-04, S-05]`) |
+| **Bike** (`BIKE`) | 1 Slot | **Rs. 10 / hr** | **Rs. 80 / day** | First available vacant slot |
+| **Car** (`CAR`) | 1 Slot | **Rs. 30 / hr** | **Rs. 240 / day** | First available vacant slot |
+| **Truck** (`TRUCK`) | **2 Consecutive Slots** | **Rs. 60 / hr** | **Rs. 480 / day** | Must occupy 2 adjacent contiguous vacant slots (e.g. `[S-04, S-05]`) |
 
 ### 🧮 Billing Formula
 
@@ -123,14 +123,22 @@ classDiagram
    $$\text{Billed Hours} = \max\left(1, \left\lceil \frac{\text{Duration in Minutes}}{60} \right\rceil\right)$$
    *Example:* 10 minutes $\to$ 1 hour; 65 minutes $\to$ 2 hours; 125 minutes $\to$ 3 hours.
 
-2. **Daily Charge Cap per 24-Hour Period**:
+2. **Daily Charge Cap per 24-Hour Period (FR-6: max 8 hours charge)**:
    $$\text{Full Days} = \lfloor \text{Billed Hours} / 24 \rfloor$$
    $$\text{Remainder Hours} = \text{Billed Hours} \pmod{24}$$
    $$\text{Total Fee} = (\text{Full Days} \times \text{Daily Cap}) + \min\left(\text{Remainder Hours} \times \text{Hourly Rate}, \text{Daily Cap}\right)$$
-   *Example (Car parked 7 hours):* $7 \times \text{Rs. } 40 = \text{Rs. } 280$, but capped at **Rs. 250**.  
-   *Example (Car parked 26 hours):* 1 full day ($\text{Rs. } 250$) + 2 remainder hours ($2 \times \text{Rs. } 40 = \text{Rs. } 80$) = **Rs. 330**.
+   *Example (Car parked 3 hours):* $3 \times \text{Rs. } 30 = \text{Rs. } 90$.  
+   *Example (Car parked 9 hours):* $9 \times \text{Rs. } 30 = \text{Rs. } 270 \to$ capped at **Rs. 240**.  
+   *Example (Car parked 26 hours):* 1 full day ($\text{Rs. } 240$) + 2 remainder hours ($2 \times \text{Rs. } 30 = \text{Rs. } 60$) = **Rs. 300**.
 
 ---
+
+## 🗄️ Database Management Systems (DBMS) Integration (R2023 IT Syllabus)
+
+ParkEase comes with a full **SQLite3 / MySQL RDBMS persistence engine** implementing Units I, II, III, IV, and V of the R2023 Anna University / REC curriculum:
+- **`schema.sql`**: Full DDL schema with primary keys, foreign keys, 3NF decomposition, B-Tree indexes, and views (`vw_active_parking`, `vw_revenue_summary`).
+- **`parkease.db`**: Auto-generated zero-configuration SQLite database.
+- **`DBMS_PROJECT_REPORT.md`**: Complete report covering ER model, 1NF/2NF/3NF/BCNF normalization proofs, ACID transactions, and NoSQL/MongoDB document comparison.
 
 ## 🛡️ Edge Cases Handled
 
@@ -179,12 +187,16 @@ ParkEase/
 │           │   └── TestRunner.java          # 10 automated unit test scenarios
 │           ├── ui/
 │           │   └── ParkEaseApp.java         # Interactive CLI application
+│           ├── db/
+│           │   └── DatabaseManager.java     # SQLite JDBC persistence & schema initialization
+│           ├── demo/
+│           │   └── LiveDemonstrator.java    # Automated live walkthrough demo
 │           └── util/
-│               └── AnsiColor.java           # ANSI color escape utilities
-├── bin/                                     # Compiled bytecode
-├── build.bat / build.ps1                    # Build scripts
-├── run.bat / run.ps1                        # Interactive launch scripts
-├── test.bat / test.ps1                      # Test runner scripts
+│               └── AnsiColor.java           # Claude terracotta dull orange ANSI utilities
+├── lib/                                     # SQLite JDBC & SLF4J Driver libraries
+├── build.sh / build.bat / build.ps1         # Cross-platform compilation scripts
+├── run.sh / run.bat / run.ps1               # Cross-platform interactive launcher
+├── demo.sh / demo.bat / demo.ps1            # Cross-platform automated live demo runner
 └── README.md
 ```
 
@@ -193,44 +205,38 @@ ParkEase/
 ## 🚀 How to Build and Run
 
 ### 1. Compile the Project
-In PowerShell or Command Prompt:
+On macOS / Linux:
+```bash
+./build.sh
+```
+On Windows (PowerShell or Command Prompt):
 ```powershell
 .\build.ps1
-# or:
+# or
 build.bat
 ```
 
 ### 2. Run the Interactive Application
+On macOS / Linux:
+```bash
+./run.sh
+```
+On Windows (PowerShell or Command Prompt):
 ```powershell
 .\run.ps1
-# or:
+# or
 run.bat
 ```
 
-### 3. Run the Automated Verification Suite
+### 3. Run the Automated Live Demo
+To watch the smart parking system operate autonomously (allocating bays, showing tandem trucks, calculating bills, and vacating slots):
+On macOS / Linux:
+```bash
+./demo.sh
+```
+On Windows (PowerShell or Command Prompt):
 ```powershell
-.\test.ps1
-# or:
-test.bat
-```
-
-### Test Suite Output:
-```
-========================================================================
-               PARKEASE AUTOMATED TEST SUITE EXECUTION                  
-========================================================================
-  ✔ [PASS] 1. Registration Plate Validation & Normalization
-  ✔ [PASS] 2. Duplicate Entry Prevention
-  ✔ [PASS] 3. Single Slot Allocation for Bike & Car
-  ✔ [PASS] 4. Truck 2-Consecutive Slot Allocation
-  ✔ [PASS] 5. Truck Fragmentation throws ParkingFullException
-  ✔ [PASS] 6. Entire Lot Full throws ParkingFullException
-  ✔ [PASS] 7. Hourly Billing with Partial Hour Rounding (Math.ceil)
-  ✔ [PASS] 8. Vehicle-Specific Daily Charge Caps
-  ✔ [PASS] 9. Multi-Day Stay with Periodic Caps Calculation
-  ✔ [PASS] 10. Full Vehicle Departure Lifecycle & Revenue Tracking
-
-========================================================================
-TEST SUITE RESULTS: 10 PASSED, 0 FAILED
-========================================================================
+.\demo.ps1
+# or
+demo.bat
 ```

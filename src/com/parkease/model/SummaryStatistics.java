@@ -2,9 +2,6 @@ package com.parkease.model;
 
 import java.util.Map;
 
-/**
- * Encapsulates live reporting metrics for ParkEase.
- */
 public class SummaryStatistics {
     private final int totalSlots;
     private final int occupiedSlots;

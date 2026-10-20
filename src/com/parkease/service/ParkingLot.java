@@ -1,17 +1,17 @@
 package com.parkease.service;
 
+import com.parkease.db.DatabaseManager;
 import com.parkease.exception.ParkingFullException;
 import com.parkease.model.*;
 import com.parkease.util.AnsiColor;
 
+import java.sql.Connection;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
 import java.time.LocalDateTime;
 import java.util.*;
-import java.util.concurrent.atomic.AtomicInteger;
 
-/**
- * Core service managing slots, vehicle entry, slot allocation,
- * duplicate prevention, exit billing, and live lot map rendering.
- */
 public class ParkingLot {
     public static final int DEFAULT_TOTAL_SLOTS = 20;
 
@@ -21,8 +21,11 @@ public class ParkingLot {
     private final Map<String, Ticket> activeTicketsByPlate;
     private final List<Ticket> completedTickets;
     private final Map<VehicleType, Double> revenueByType;
-    private final AtomicInteger ticketCounter;
+    private int ticketCounter;
     private double totalRevenueCollected;
+    private int completedTicketsCount = 0;
+
+    private final DatabaseManager dbManager;
 
     public ParkingLot() {
         this(DEFAULT_TOTAL_SLOTS);
@@ -30,7 +33,7 @@ public class ParkingLot {
 
     public ParkingLot(int totalSlots) {
         if (totalSlots < 2) {
-            throw new IllegalArgumentException("Total slots must be at least 2 to support vehicles and trucks.");
+            throw new IllegalArgumentException("Total slots must be at least 2.");
         }
         this.totalSlots = totalSlots;
         this.slots = new ArrayList<>(totalSlots);
@@ -44,8 +47,118 @@ public class ParkingLot {
         for (VehicleType vt : VehicleType.values()) {
             revenueByType.put(vt, 0.0);
         }
-        this.ticketCounter = new AtomicInteger(1001);
         this.totalRevenueCollected = 0.0;
+
+        this.dbManager = DatabaseManager.getInstance();
+
+        int startSeq = 1001;
+        if (this.dbManager != null && this.dbManager.isDriverAvailable()) {
+            startSeq = Math.max(1001, this.dbManager.getNextTicketSequence());
+            loadFromDatabase();
+        }
+        this.ticketCounter = startSeq;
+    }
+
+    private void loadFromDatabase() {
+        if (dbManager == null || !dbManager.isDriverAvailable()) return;
+
+        try (Connection conn = dbManager.getConnection();
+             Statement stmt = conn.createStatement()) {
+
+            stmt.executeUpdate("UPDATE tickets SET is_active = 0 WHERE is_active = 1 AND ticket_id NOT IN (SELECT current_ticket_id FROM parking_slots WHERE is_occupied = 1)");
+
+            try (ResultSet rs = stmt.executeQuery("SELECT vehicle_type, COUNT(*), SUM(fee_charged) FROM tickets WHERE is_active = 0 GROUP BY vehicle_type")) {
+                while (rs.next()) {
+                    String vType = rs.getString(1);
+                    int count = rs.getInt(2);
+                    double fee = rs.getDouble(3);
+                    try {
+                        VehicleType vt = VehicleType.valueOf(vType);
+                        revenueByType.put(vt, fee);
+                        totalRevenueCollected += fee;
+                        completedTicketsCount += count;
+                    } catch (Exception ignored) {}
+                }
+            }
+
+            String activeSql = "SELECT t.ticket_id, t.plate_number, v.owner_name, t.vehicle_type, t.entry_time " +
+                               "FROM tickets t LEFT JOIN vehicles v ON t.plate_number = v.plate_number " +
+                               "WHERE t.is_active = 1";
+            try (ResultSet rs = stmt.executeQuery(activeSql)) {
+                while (rs.next()) {
+                    String ticketId = rs.getString(1);
+                    String plate = rs.getString(2);
+                    String owner = rs.getString(3);
+                    if (owner == null || owner.isEmpty()) owner = "Walk-in Guest";
+                    String typeStr = rs.getString(4);
+                    String entryStr = rs.getString(5);
+
+                    VehicleType vt;
+                    try {
+                        vt = VehicleType.valueOf(typeStr);
+                    } catch (Exception e) {
+                        vt = VehicleType.CAR;
+                    }
+
+                    Vehicle vehicle;
+                    switch (vt) {
+                        case BIKE -> vehicle = new Bike(plate, owner);
+                        case CAR -> vehicle = new Car(plate, owner);
+                        case TRUCK -> vehicle = new Truck(plate, owner);
+                        default -> vehicle = new Car(plate, owner);
+                    }
+
+                    LocalDateTime entryTime;
+                    try {
+                        entryTime = LocalDateTime.parse(entryStr);
+                    } catch (Exception e) {
+                        entryTime = LocalDateTime.now();
+                    }
+
+                    List<Integer> allocatedSlots = new ArrayList<>();
+                    try (Statement slotStmt = conn.createStatement();
+                         ResultSet slotRs = slotStmt.executeQuery("SELECT slot_number FROM ticket_slots WHERE ticket_id = '" + ticketId + "' ORDER BY slot_number")) {
+                        while (slotRs.next()) {
+                            allocatedSlots.add(slotRs.getInt(1));
+                        }
+                    }
+
+                    if (allocatedSlots.isEmpty()) {
+                        try (Statement psStmt = conn.createStatement();
+                             ResultSet psRs = psStmt.executeQuery("SELECT slot_number FROM parking_slots WHERE current_ticket_id = '" + ticketId + "' ORDER BY slot_number")) {
+                            while (psRs.next()) {
+                                allocatedSlots.add(psRs.getInt(1));
+                            }
+                        }
+                    }
+
+                    if (!allocatedSlots.isEmpty()) {
+                        Ticket ticket = new Ticket(ticketId, vehicle, allocatedSlots, entryTime);
+                        activeTicketsById.put(ticketId, ticket);
+                        activeTicketsByPlate.put(plate, ticket);
+
+                        boolean isTruck = (vt == VehicleType.TRUCK && allocatedSlots.size() == 2);
+                        if (isTruck) {
+                            int s1 = allocatedSlots.get(0);
+                            int s2 = allocatedSlots.get(1);
+                            if (s1 <= totalSlots && s2 <= totalSlots) {
+                                slots.get(s1 - 1).occupy(vehicle, ticketId, true, s2);
+                                slots.get(s2 - 1).occupy(vehicle, ticketId, true, s1);
+                            }
+                        } else {
+                            for (int s : allocatedSlots) {
+                                if (s <= totalSlots) {
+                                    slots.get(s - 1).occupy(vehicle, ticketId, false, 0);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+        } catch (SQLException e) {
+            System.err.println("Error loading state from database: " + e.getMessage());
+        }
     }
 
     public int getTotalSlots() {
@@ -53,7 +166,7 @@ public class ParkingLot {
     }
 
     public List<ParkingSlot> getSlots() {
-        return Collections.unmodifiableList(slots);
+        return slots;
     }
 
     public int getOccupiedSlotsCount() {
@@ -69,25 +182,17 @@ public class ParkingLot {
     }
 
     public Collection<Ticket> getActiveTickets() {
-        return Collections.unmodifiableCollection(activeTicketsById.values());
+        return activeTicketsById.values();
     }
 
     public List<Ticket> getCompletedTickets() {
-        return Collections.unmodifiableList(completedTickets);
+        return completedTickets;
     }
 
-    /**
-     * Parks a vehicle into the lot:
-     * 1. Validates duplicate entry.
-     * 2. Finds correct slots (1 slot for Bike/Car, 2 consecutive slots for Truck).
-     * 3. Throws ParkingFullException if unavailable.
-     * 4. Allocates slots, generates ticket, and tracks active status.
-     *
-     * @param vehicle Vehicle requesting entry.
-     * @return Generated active Ticket.
-     * @throws ParkingFullException If suitable slots are not available.
-     * @throws IllegalArgumentException If duplicate entry or null vehicle.
-     */
+    public DatabaseManager getDatabaseManager() {
+        return dbManager;
+    }
+
     public synchronized Ticket parkVehicle(Vehicle vehicle) throws ParkingFullException {
         if (vehicle == null) {
             throw new IllegalArgumentException("Vehicle cannot be null.");
@@ -95,20 +200,15 @@ public class ParkingLot {
 
         String plate = vehicle.getPlateNumber();
 
-        // 1. Duplicate-entry prevention
         if (activeTicketsByPlate.containsKey(plate)) {
             Ticket existing = activeTicketsByPlate.get(plate);
-            throw new IllegalArgumentException(String.format(
-                    "Duplicate entry rejected! Vehicle with plate '%s' is already parked in slot(s) %s (Ticket: %s).",
-                    plate, existing.getFormattedSlots(), existing.getTicketId()));
+            throw new IllegalArgumentException("Vehicle with plate '" + plate + "' is already parked in slot " + existing.getFormattedSlots());
         }
 
         VehicleType type = vehicle.getVehicleType();
         List<Integer> allocatedSlotIndices = new ArrayList<>();
 
-        // 2. Slot allocation logic
         if (type == VehicleType.TRUCK) {
-            // Trucks require TWO CONSECUTIVE vacant slots
             int foundIndex = -1;
             for (int i = 0; i < totalSlots - 1; i++) {
                 if (slots.get(i).isVacant() && slots.get(i + 1).isVacant()) {
@@ -120,19 +220,15 @@ public class ParkingLot {
             if (foundIndex == -1) {
                 int vacantCount = getVacantSlotsCount();
                 if (vacantCount == 0) {
-                    throw new ParkingFullException(VehicleType.TRUCK,
-                            "Parking full: Lot is at 100% capacity (0 slots free).");
+                    throw new ParkingFullException(VehicleType.TRUCK, "Parking full: 0 slots free.");
                 } else {
-                    throw new ParkingFullException(VehicleType.TRUCK, String.format(
-                            "Parking full for Truck: Requires 2 CONSECUTIVE slots, but only %d isolated non-adjacent slot(s) are free.",
-                            vacantCount));
+                    throw new ParkingFullException(VehicleType.TRUCK, "Parking full for Truck: Requires 2 consecutive slots, but only " + vacantCount + " separate slot(s) free.");
                 }
             }
 
             allocatedSlotIndices.add(foundIndex);
             allocatedSlotIndices.add(foundIndex + 1);
         } else {
-            // Bike and Car require 1 slot
             int foundIndex = -1;
             for (int i = 0; i < totalSlots; i++) {
                 if (slots.get(i).isVacant()) {
@@ -142,15 +238,13 @@ public class ParkingLot {
             }
 
             if (foundIndex == -1) {
-                throw new ParkingFullException(type,
-                        "Parking full: No vacant slots available for " + type.getDisplayName() + ".");
+                throw new ParkingFullException(type, "Parking full: No vacant slots available for " + type.getDisplayName() + ".");
             }
 
             allocatedSlotIndices.add(foundIndex);
         }
 
-        // 3. Generate Ticket ID and allocate
-        String ticketId = "TKT-" + ticketCounter.getAndIncrement();
+        String ticketId = "TKT-" + (ticketCounter++);
         List<Integer> slotNumbers = new ArrayList<>();
 
         if (type == VehicleType.TRUCK) {
@@ -171,66 +265,80 @@ public class ParkingLot {
         activeTicketsById.put(ticketId, ticket);
         activeTicketsByPlate.put(plate, ticket);
 
+        if (dbManager != null && dbManager.isDriverAvailable()) {
+            try (Connection conn = dbManager.getConnection()) {
+                conn.setAutoCommit(false);
+                try {
+                    dbManager.saveVehicle(vehicle, conn);
+                    dbManager.saveTicket(ticket, conn);
+                    dbManager.occupySlots(slotNumbers, ticketId, type == VehicleType.TRUCK, conn);
+                    conn.commit();
+                } catch (SQLException ex) {
+                    conn.rollback();
+                    System.err.println("[Database] Rolled back: " + ex.getMessage());
+                }
+            } catch (SQLException e) {
+                System.err.println("[Database] Error: " + e.getMessage());
+            }
+        }
+
         return ticket;
     }
 
-    /**
-     * Exits a parked vehicle using either Ticket ID or Registration Plate Number.
-     * Computes parking fee with partial hour rounded up and daily cap applied.
-     * Frees occupied slots.
-     *
-     * @param identifier Ticket ID (e.g. TKT-1001) or Plate Number (e.g. MH12AB1234).
-     * @param exitTime   Exit timestamp.
-     * @return Closed ticket with payment breakdown.
-     */
     public synchronized Ticket exitVehicle(String identifier, LocalDateTime exitTime) {
         if (identifier == null || identifier.trim().isEmpty()) {
-            throw new IllegalArgumentException("Identifier (Ticket ID or Plate Number) cannot be empty.");
+            throw new IllegalArgumentException("Identifier cannot be empty.");
         }
 
         String searchKey = identifier.trim().toUpperCase();
         Ticket ticket = activeTicketsById.get(searchKey);
 
         if (ticket == null) {
-            // Try matching normalized plate number
             try {
                 String normalizedPlate = Vehicle.validateAndNormalizePlate(identifier);
                 ticket = activeTicketsByPlate.get(normalizedPlate);
             } catch (Exception ignored) {
-                // If not standard plate format, look up raw uppercase
                 ticket = activeTicketsByPlate.get(searchKey);
             }
         }
 
         if (ticket == null) {
-            throw new IllegalArgumentException(String.format(
-                    "No active parked vehicle found matching '%s'. Please verify Ticket ID or Plate Number.",
-                    identifier));
+            throw new IllegalArgumentException("No parked vehicle found matching '" + identifier + "'.");
         }
 
-        // Close ticket and compute billing
         ticket.closeTicket(exitTime);
 
-        // Free slots
         for (int slotNum : ticket.getAllocatedSlots()) {
             slots.get(slotNum - 1).vacate();
         }
 
-        // Remove from active maps
         activeTicketsById.remove(ticket.getTicketId());
         activeTicketsByPlate.remove(ticket.getVehicle().getPlateNumber());
 
-        // Update historical tracking and revenue
         completedTickets.add(ticket);
+        completedTicketsCount++;
         totalRevenueCollected += ticket.getFeeCharged();
         revenueByType.merge(ticket.getVehicle().getVehicleType(), ticket.getFeeCharged(), Double::sum);
+
+        if (dbManager != null && dbManager.isDriverAvailable()) {
+            try (Connection conn = dbManager.getConnection()) {
+                conn.setAutoCommit(false);
+                try {
+                    dbManager.closeTicket(ticket, conn);
+                    dbManager.vacateSlots(ticket.getAllocatedSlots(), conn);
+                    conn.commit();
+                } catch (SQLException ex) {
+                    conn.rollback();
+                    System.err.println("[Database] Rolled back: " + ex.getMessage());
+                }
+            } catch (SQLException e) {
+                System.err.println("[Database] Error: " + e.getMessage());
+            }
+        }
 
         return ticket;
     }
 
-    /**
-     * Looks up an active ticket by Ticket ID or Plate Number.
-     */
     public synchronized Optional<Ticket> findActiveTicket(String identifier) {
         if (identifier == null) return Optional.empty();
         String searchKey = identifier.trim().toUpperCase();
@@ -246,9 +354,6 @@ public class ParkingLot {
         return Optional.ofNullable(activeTicketsByPlate.get(searchKey));
     }
 
-    /**
-     * Generates a live summary snapshot of lot metrics.
-     */
     public synchronized SummaryStatistics getSummary() {
         int bikeCount = 0;
         int carCount = 0;
@@ -262,6 +367,8 @@ public class ParkingLot {
             }
         }
 
+        int totalIssued = (ticketCounter > 1001) ? (ticketCounter - 1001) : (completedTicketsCount + activeTicketsById.size());
+
         return new SummaryStatistics(
                 totalSlots,
                 getOccupiedSlotsCount(),
@@ -269,38 +376,33 @@ public class ParkingLot {
                 bikeCount,
                 carCount,
                 truckCount,
-                ticketCounter.get() - 1001,
-                completedTickets.size(),
+                totalIssued,
+                completedTicketsCount,
                 totalRevenueCollected,
                 new EnumMap<>(revenueByType)
         );
     }
 
-    /**
-     * Renders a clean ASCII visual slot map of the parking lot with consistent cell widths.
-     */
     public synchronized String renderLiveSlotMap() {
         StringBuilder sb = new StringBuilder();
         String headerBorder = "+" + "-".repeat(93) + "+\n";
-        sb.append(AnsiColor.cyan(headerBorder));
-        sb.append(AnsiColor.bold(AnsiColor.cyan(String.format("|%32sPARKEASE LIVE PARKING LOT MAP%32s|\n", "", ""))));
-        sb.append(AnsiColor.cyan(headerBorder));
+        sb.append(AnsiColor.orange(headerBorder));
+        sb.append(AnsiColor.bold(AnsiColor.orange(String.format("|%32sPARKEASE LIVE PARKING LOT MAP%32s|\n", "", ""))));
+        sb.append(AnsiColor.orange(headerBorder));
 
-        int cols = 4; // 4 slots per row for clean terminal presentation
+        int cols = 4;
         int rows = (int) Math.ceil((double) totalSlots / cols);
 
         for (int r = 0; r < rows; r++) {
-            // Top border of row
             for (int c = 0; c < cols; c++) {
                 int index = r * cols + c;
                 if (index < totalSlots) {
-                    sb.append("+---------------------+");
+                    sb.append(AnsiColor.orange("+---------------------+"));
                     if (c < cols - 1 && index + 1 < totalSlots) sb.append(" ");
                 }
             }
             sb.append("\n");
 
-            // Line 1: Slot Number & Status Tag
             for (int c = 0; c < cols; c++) {
                 int index = r * cols + c;
                 if (index < totalSlots) {
@@ -308,75 +410,65 @@ public class ParkingLot {
                     String slotId = slot.getFormattedSlotId();
                     if (slot.isVacant()) {
                         String inner = String.format(" %-4s  %-14s", slotId, "[VACANT]");
-                        sb.append("|").append(AnsiColor.green(inner)).append("|");
+                        sb.append(AnsiColor.orange("|")).append(AnsiColor.orange(inner)).append(AnsiColor.orange("|"));
                     } else {
                         VehicleType vt = slot.getCurrentVehicle().getVehicleType();
                         String tag = "[" + vt.name() + "]";
                         String inner = String.format(" %-4s  %-14s", slotId, tag);
-                        String colored = switch (vt) {
-                            case BIKE -> AnsiColor.yellow(inner);
-                            case CAR -> AnsiColor.blue(inner);
-                            case TRUCK -> AnsiColor.magenta(inner);
-                        };
-                        sb.append("|").append(colored).append("|");
+                        sb.append(AnsiColor.orange("|")).append(AnsiColor.bold(AnsiColor.orange(inner))).append(AnsiColor.orange("|"));
                     }
                     if (c < cols - 1 && index + 1 < totalSlots) sb.append(" ");
                 }
             }
             sb.append("\n");
 
-            // Line 2: Plate Number or vacancy placeholder
             for (int c = 0; c < cols; c++) {
                 int index = r * cols + c;
                 if (index < totalSlots) {
                     ParkingSlot slot = slots.get(index);
                     if (slot.isVacant()) {
-                        sb.append(String.format("| %-20s|", "(Ready to park)"));
+                        sb.append(AnsiColor.orange("|")).append(AnsiColor.gray(String.format(" %-20s", "(Ready to park)"))).append(AnsiColor.orange("|"));
                     } else {
                         String plate = slot.getCurrentVehicle().getPlateNumber();
-                        sb.append(String.format("| Plate: %-13s|", plate));
+                        sb.append(AnsiColor.orange("|")).append(AnsiColor.orange(" Plate: ")).append(AnsiColor.bold(AnsiColor.white(String.format("%-13s", plate)))).append(AnsiColor.orange("|"));
                     }
                     if (c < cols - 1 && index + 1 < totalSlots) sb.append(" ");
                 }
             }
             sb.append("\n");
 
-            // Line 3: Ticket ID & Tandem linkage
             for (int c = 0; c < cols; c++) {
                 int index = r * cols + c;
                 if (index < totalSlots) {
                     ParkingSlot slot = slots.get(index);
                     if (slot.isVacant()) {
-                        sb.append("|                     |");
+                        sb.append(AnsiColor.orange("|                     |"));
                     } else if (slot.isLinkedTandem()) {
                         String tandem = String.format(" %-8s <-> %-6s",
                                 slot.getCurrentTicketId(), String.format("S-%02d", slot.getLinkedSlotNumber()));
-                        sb.append(String.format("|%-21s|", tandem));
+                        sb.append(AnsiColor.orange("|")).append(AnsiColor.white(String.format("%-21s", tandem))).append(AnsiColor.orange("|"));
                     } else {
-                        sb.append(String.format("| Ticket: %-12s|", slot.getCurrentTicketId()));
+                        sb.append(AnsiColor.orange("|")).append(AnsiColor.orange(" Ticket: ")).append(AnsiColor.white(String.format("%-12s", slot.getCurrentTicketId()))).append(AnsiColor.orange("|"));
                     }
                     if (c < cols - 1 && index + 1 < totalSlots) sb.append(" ");
                 }
             }
             sb.append("\n");
 
-            // Bottom border of row
             for (int c = 0; c < cols; c++) {
                 int index = r * cols + c;
                 if (index < totalSlots) {
-                    sb.append("+---------------------+");
+                    sb.append(AnsiColor.orange("+---------------------+"));
                     if (c < cols - 1 && index + 1 < totalSlots) sb.append(" ");
                 }
             }
             sb.append("\n\n");
         }
 
-        // Legend with plain ASCII labels and Rs.
-        sb.append(String.format("%s Vacant   %s Bike (Rs. 20/hr, Cap Rs. 100)   %s Car (Rs. 40/hr, Cap Rs. 250)   %s Truck (Rs. 100/hr, Cap Rs. 600, 2 Slots)\n",
-                AnsiColor.green("[VACANT]"),
-                AnsiColor.yellow("[BIKE]"),
-                AnsiColor.blue("[CAR]"),
-                AnsiColor.magenta("[TRUCK]")));
+        sb.append(AnsiColor.orange("[VACANT]") + AnsiColor.white(" Vacant   ") +
+                AnsiColor.orange("[BIKE]") + AnsiColor.white(" Bike (Rs. 10/hr)   ") +
+                AnsiColor.orange("[CAR]") + AnsiColor.white(" Car (Rs. 30/hr)   ") +
+                AnsiColor.orange("[TRUCK]") + AnsiColor.white(" Truck (Rs. 60/hr, 2 Slots)\n"));
 
         return sb.toString();
     }

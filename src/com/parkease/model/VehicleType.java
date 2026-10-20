@@ -1,13 +1,9 @@
 package com.parkease.model;
 
-/**
- * Enumeration representing supported vehicle types in ParkEase.
- * Holds business rules for slot requirements, hourly billing rates, and daily caps.
- */
 public enum VehicleType {
-    BIKE("Bike", 1, 20.0, 100.0),
-    CAR("Car", 1, 40.0, 250.0),
-    TRUCK("Truck", 2, 100.0, 600.0);
+    BIKE("Bike", 1, 10.0, 80.0),
+    CAR("Car", 1, 30.0, 240.0),
+    TRUCK("Truck", 2, 60.0, 480.0);
 
     private final String displayName;
     private final int requiredSlots;
@@ -35,11 +31,5 @@ public enum VehicleType {
 
     public double getDailyCap() {
         return dailyCap;
-    }
-
-    @Override
-    public String toString() {
-        return String.format("%s [Slots: %d, Rate: Rs. %.2f/hr, Daily Cap: Rs. %.2f]",
-                displayName, requiredSlots, hourlyRate, dailyCap);
     }
 }

@@ -1,15 +1,13 @@
 package com.parkease.model;
 
+import com.parkease.util.AnsiColor;
+
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 
-/**
- * Represents an entry/exit parking ticket in the ParkEase system.
- */
 public class Ticket {
     private static final DateTimeFormatter TIME_FMT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
@@ -40,7 +38,7 @@ public class Ticket {
     }
 
     public List<Integer> getAllocatedSlots() {
-        return Collections.unmodifiableList(allocatedSlots);
+        return allocatedSlots;
     }
 
     public String getFormattedSlots() {
@@ -80,18 +78,12 @@ public class Ticket {
         return active;
     }
 
-    /**
-     * Closes the ticket upon vehicle departure and calculates the fee.
-     *
-     * @param exitTime Departure time.
-     */
     public void closeTicket(LocalDateTime exitTime) {
         if (!this.active) {
-            throw new IllegalStateException("Ticket " + ticketId + " has already been closed.");
+            throw new IllegalStateException("Ticket " + ticketId + " is already closed.");
         }
         if (exitTime.isBefore(this.entryTime)) {
-            throw new IllegalArgumentException("Exit time (" + exitTime.format(TIME_FMT) +
-                    ") cannot be before entry time (" + this.entryTime.format(TIME_FMT) + ").");
+            throw new IllegalArgumentException("Exit time cannot be before entry time.");
         }
 
         this.exitTime = exitTime;
@@ -101,59 +93,51 @@ public class Ticket {
         this.active = false;
     }
 
-    /**
-     * Generates a printable entry receipt using clean ASCII borders.
-     */
     public String generateEntryReceipt() {
         String rateInfo = String.format("Rs. %.0f/hr (Max Rs. %.0f/day)",
                 vehicle.getHourlyRate(), vehicle.getDailyCap());
 
         return String.join("\n",
-                "+--------------------------------------------------------+",
-                "|                 PARKEASE ENTRY TICKET                  |",
-                "+--------------------------------------------------------+",
-                String.format("|  %-14s: %-37s |", "Ticket ID", ticketId),
-                String.format("|  %-14s: %-37s |", "Plate Number", vehicle.getPlateNumber()),
-                String.format("|  %-14s: %-37s |", "Vehicle Type", vehicle.getVehicleType().getDisplayName()),
-                String.format("|  %-14s: %-37s |", "Allocated", getFormattedSlots()),
-                String.format("|  %-14s: %-37s |", "Entry Time", entryTime.format(TIME_FMT)),
-                String.format("|  %-14s: %-37s |", "Rate / Cap", rateInfo),
-                "|                                                        |",
-                "|  * Please retain this ticket for departure.            |",
-                "|  * Partial hours are rounded up to the full hour.      |",
-                "+--------------------------------------------------------+"
+                AnsiColor.orange("+--------------------------------------------------------+"),
+                AnsiColor.bold(AnsiColor.orange("|                 PARKEASE ENTRY TICKET                  |")),
+                AnsiColor.orange("+--------------------------------------------------------+"),
+                AnsiColor.orange("|  Ticket ID     : ") + AnsiColor.bold(AnsiColor.white(String.format("%-37s", ticketId))) + AnsiColor.orange(" |"),
+                AnsiColor.orange("|  Plate Number  : ") + AnsiColor.bold(AnsiColor.white(String.format("%-37s", vehicle.getPlateNumber()))) + AnsiColor.orange(" |"),
+                AnsiColor.orange("|  Owner Name    : ") + AnsiColor.white(String.format("%-37s", vehicle.getOwnerName())) + AnsiColor.orange(" |"),
+                AnsiColor.orange("|  Vehicle Type  : ") + AnsiColor.white(String.format("%-37s", vehicle.getVehicleType().getDisplayName())) + AnsiColor.orange(" |"),
+                AnsiColor.orange("|  Allocated     : ") + AnsiColor.bold(AnsiColor.white(String.format("%-37s", getFormattedSlots()))) + AnsiColor.orange(" |"),
+                AnsiColor.orange("|  Entry Time    : ") + AnsiColor.white(String.format("%-37s", entryTime.format(TIME_FMT))) + AnsiColor.orange(" |"),
+                AnsiColor.orange("|  Rate / Cap    : ") + AnsiColor.white(String.format("%-37s", rateInfo)) + AnsiColor.orange(" |"),
+                AnsiColor.orange("+--------------------------------------------------------+")
         );
     }
 
-    /**
-     * Generates a printable departure receipt with detailed billing breakdown using clean ASCII borders.
-     */
     public String generateExitReceipt() {
         long days = billedHours / 24;
         long remHours = billedHours % 24;
         String breakdown = days > 0
                 ? String.format("%dd @ Rs.%.0f + %dhr @ Rs.%.0f", days, vehicle.getDailyCap(), remHours, vehicle.getHourlyRate())
-                : String.format("%d hr(s) @ Rs.%.0f/hr (Cap: Rs.%.0f)", billedHours, vehicle.getHourlyRate(), vehicle.getDailyCap());
+                : String.format("%d hr(s) x Rs.%.0f = Rs.%.0f (Cap Rs.%.0f)", billedHours, vehicle.getHourlyRate(), billedHours * vehicle.getHourlyRate(), vehicle.getDailyCap());
 
         String feeFormatted = String.format("Rs. %.2f", feeCharged);
 
         return String.join("\n",
-                "+--------------------------------------------------------+",
-                "|                 PARKEASE EXIT RECEIPT                  |",
-                "+--------------------------------------------------------+",
-                String.format("|  %-14s: %-37s |", "Ticket ID", ticketId),
-                String.format("|  %-14s: %-37s |", "Plate Number", vehicle.getPlateNumber()),
-                String.format("|  %-14s: %-37s |", "Vehicle Type", vehicle.getVehicleType().getDisplayName()),
-                String.format("|  %-14s: %-37s |", "Freed Slots", getFormattedSlots()),
-                String.format("|  %-14s: %-37s |", "Entry Time", entryTime.format(TIME_FMT)),
-                String.format("|  %-14s: %-37s |", "Exit Time", exitTime.format(TIME_FMT)),
-                String.format("|  %-14s: %-37s |", "Stay Duration", formatDuration(durationMinutes)),
-                String.format("|  %-14s: %-37s |", "Billed Hours", billedHours + " hour(s) [rounded up]"),
-                String.format("|  %-14s: %-37s |", "Billing Rule", breakdown),
-                "+--------------------------------------------------------+",
-                String.format("|  %-14s: %-37s |", "TOTAL CHARGED", feeFormatted),
-                "|  PAYMENT STATUS: PAID (Thank you for parking!)         |",
-                "+--------------------------------------------------------+"
+                AnsiColor.orange("+--------------------------------------------------------+"),
+                AnsiColor.bold(AnsiColor.orange("|                 PARKEASE EXIT RECEIPT                  |")),
+                AnsiColor.orange("+--------------------------------------------------------+"),
+                AnsiColor.orange("|  Ticket ID     : ") + AnsiColor.bold(AnsiColor.white(String.format("%-37s", ticketId))) + AnsiColor.orange(" |"),
+                AnsiColor.orange("|  Plate Number  : ") + AnsiColor.bold(AnsiColor.white(String.format("%-37s", vehicle.getPlateNumber()))) + AnsiColor.orange(" |"),
+                AnsiColor.orange("|  Owner Name    : ") + AnsiColor.white(String.format("%-37s", vehicle.getOwnerName())) + AnsiColor.orange(" |"),
+                AnsiColor.orange("|  Vehicle Type  : ") + AnsiColor.white(String.format("%-37s", vehicle.getVehicleType().getDisplayName())) + AnsiColor.orange(" |"),
+                AnsiColor.orange("|  Freed Slots   : ") + AnsiColor.bold(AnsiColor.white(String.format("%-37s", getFormattedSlots()))) + AnsiColor.orange(" |"),
+                AnsiColor.orange("|  Entry Time    : ") + AnsiColor.white(String.format("%-37s", entryTime.format(TIME_FMT))) + AnsiColor.orange(" |"),
+                AnsiColor.orange("|  Exit Time     : ") + AnsiColor.white(String.format("%-37s", exitTime.format(TIME_FMT))) + AnsiColor.orange(" |"),
+                AnsiColor.orange("|  Stay Duration : ") + AnsiColor.white(String.format("%-37s", formatDuration(durationMinutes))) + AnsiColor.orange(" |"),
+                AnsiColor.orange("|  Billed Hours  : ") + AnsiColor.white(String.format("%-37s", billedHours + " hour(s) [rounded up]")) + AnsiColor.orange(" |"),
+                AnsiColor.orange("|  Billing Rule  : ") + AnsiColor.white(String.format("%-37s", breakdown)) + AnsiColor.orange(" |"),
+                AnsiColor.orange("+--------------------------------------------------------+"),
+                AnsiColor.bold(AnsiColor.orange("|  TOTAL CHARGED : ")) + AnsiColor.bold(AnsiColor.white(String.format("%-37s", feeFormatted))) + AnsiColor.orange(" |"),
+                AnsiColor.orange("+--------------------------------------------------------+")
         );
     }
 
@@ -161,8 +145,8 @@ public class Ticket {
         long hrs = minutes / 60;
         long mins = minutes % 60;
         if (hrs == 0) {
-            return mins + " minute(s)";
+            return mins + " min";
         }
-        return String.format("%d hour(s) %d minute(s)", hrs, mins);
+        return String.format("%d hr %d min", hrs, mins);
     }
 }

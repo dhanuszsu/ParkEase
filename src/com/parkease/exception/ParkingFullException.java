@@ -2,11 +2,6 @@ package com.parkease.exception;
 
 import com.parkease.model.VehicleType;
 
-/**
- * Custom checked exception thrown when a vehicle cannot be accommodated
- * in the parking lot due to lack of available slots or failure to find
- * consecutive slots (e.g. for trucks).
- */
 public class ParkingFullException extends Exception {
     private final VehicleType vehicleType;
     private final int requiredSlots;
