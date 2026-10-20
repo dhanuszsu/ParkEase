@@ -3,28 +3,71 @@ package com.parkease.db;
 import com.parkease.model.Ticket;
 import com.parkease.model.Vehicle;
 
+import java.io.File;
+import java.io.FileInputStream;
 import java.sql.*;
 import java.util.List;
+import java.util.Properties;
 
 public class DatabaseManager {
-    public static final String DEFAULT_DB_URL = "jdbc:sqlite:parkease.db";
+    public static final String DEFAULT_SQLITE_URL = "jdbc:sqlite:parkease.db";
     private static DatabaseManager instance;
 
-    private final String dbUrl;
+    private String dbType = "SQLITE";
+    private String dbUrl = DEFAULT_SQLITE_URL;
+    private String dbUser = "";
+    private String dbPassword = "";
     private boolean driverAvailable;
 
     public DatabaseManager() {
-        this(DEFAULT_DB_URL);
+        loadConfiguration();
+        initConnection();
     }
 
-    public DatabaseManager(String dbUrl) {
-        this.dbUrl = dbUrl;
+    private void loadConfiguration() {
+        File propFile = new File("db.properties");
+        if (propFile.exists()) {
+            Properties props = new Properties();
+            try (FileInputStream fis = new FileInputStream(propFile)) {
+                props.load(fis);
+                String type = props.getProperty("db.type", "SQLITE").trim().toUpperCase();
+                if ("MYSQL".equals(type)) {
+                    this.dbType = "MYSQL";
+                    String host = props.getProperty("db.mysql.host", "localhost");
+                    String port = props.getProperty("db.mysql.port", "3306");
+                    String dbName = props.getProperty("db.mysql.name", "parkease");
+                    this.dbUrl = "jdbc:mysql://" + host + ":" + port + "/" + dbName + "?createDatabaseIfNotExist=true&allowPublicKeyRetrieval=true&useSSL=false";
+                    this.dbUser = props.getProperty("db.mysql.user", "root");
+                    this.dbPassword = props.getProperty("db.mysql.password", "");
+                    return;
+                }
+            } catch (Exception ignored) {}
+        }
+        this.dbType = "SQLITE";
+        this.dbUrl = DEFAULT_SQLITE_URL;
+    }
+
+    private void initConnection() {
         try {
-            Class.forName("org.sqlite.JDBC");
+            if ("MYSQL".equals(dbType)) {
+                Class.forName("com.mysql.cj.jdbc.Driver");
+            } else {
+                Class.forName("org.sqlite.JDBC");
+            }
             this.driverAvailable = true;
             initSchema();
         } catch (ClassNotFoundException e) {
-            this.driverAvailable = false;
+            try {
+                Class.forName("org.sqlite.JDBC");
+                this.dbType = "SQLITE";
+                this.dbUrl = DEFAULT_SQLITE_URL;
+                this.dbUser = "";
+                this.dbPassword = "";
+                this.driverAvailable = true;
+                initSchema();
+            } catch (ClassNotFoundException ex) {
+                this.driverAvailable = false;
+            }
         }
     }
 
@@ -39,26 +82,38 @@ public class DatabaseManager {
         return driverAvailable;
     }
 
+    public String getDbType() {
+        return dbType;
+    }
+
     public Connection getConnection() throws SQLException {
         if (!driverAvailable) {
-            throw new SQLException("SQLite JDBC Driver not found.");
+            throw new SQLException("Database JDBC Driver not found.");
         }
-        return DriverManager.getConnection(dbUrl);
+        if ("MYSQL".equals(dbType)) {
+            return DriverManager.getConnection(dbUrl, dbUser, dbPassword);
+        } else {
+            return DriverManager.getConnection(dbUrl);
+        }
     }
 
     public void initSchema() {
         if (!driverAvailable) return;
 
         try (Connection conn = getConnection(); Statement stmt = conn.createStatement()) {
-            stmt.execute("CREATE TABLE IF NOT EXISTS vehicles (plate_number TEXT PRIMARY KEY, owner_name TEXT, vehicle_type TEXT);");
+            stmt.execute("CREATE TABLE IF NOT EXISTS vehicles (plate_number VARCHAR(20) PRIMARY KEY, owner_name VARCHAR(100), vehicle_type VARCHAR(10));");
 
-            stmt.execute("CREATE TABLE IF NOT EXISTS parking_slots (slot_number INTEGER PRIMARY KEY, is_occupied INTEGER, current_ticket_id TEXT, is_linked_tandem INTEGER, linked_slot_number INTEGER);");
+            stmt.execute("CREATE TABLE IF NOT EXISTS parking_slots (slot_number INT PRIMARY KEY, is_occupied INT, current_ticket_id VARCHAR(20), is_linked_tandem INT, linked_slot_number INT);");
 
-            stmt.execute("CREATE TABLE IF NOT EXISTS tickets (ticket_id TEXT PRIMARY KEY, plate_number TEXT, vehicle_type TEXT, entry_time TEXT, exit_time TEXT, duration_minutes INTEGER, billed_hours INTEGER, hourly_rate REAL, daily_cap REAL, fee_charged REAL, is_active INTEGER);");
+            stmt.execute("CREATE TABLE IF NOT EXISTS tickets (ticket_id VARCHAR(20) PRIMARY KEY, plate_number VARCHAR(20), vehicle_type VARCHAR(10), entry_time VARCHAR(40), exit_time VARCHAR(40), duration_minutes INT, billed_hours INT, hourly_rate DOUBLE, daily_cap DOUBLE, fee_charged DOUBLE, is_active INT);");
 
-            stmt.execute("CREATE TABLE IF NOT EXISTS ticket_slots (ticket_id TEXT, slot_number INTEGER, PRIMARY KEY (ticket_id, slot_number));");
+            stmt.execute("CREATE TABLE IF NOT EXISTS ticket_slots (ticket_id VARCHAR(20), slot_number INT, PRIMARY KEY (ticket_id, slot_number));");
 
-            stmt.execute("CREATE VIEW IF NOT EXISTS vw_revenue_summary AS SELECT vehicle_type, COUNT(*) AS total_tickets_issued, SUM(CASE WHEN is_active=0 THEN 1 ELSE 0 END) AS completed_checkouts, SUM(CASE WHEN is_active=1 THEN 1 ELSE 0 END) AS currently_parked, ROUND(SUM(fee_charged), 2) AS total_revenue FROM tickets GROUP BY vehicle_type;");
+            if ("MYSQL".equals(dbType)) {
+                stmt.execute("CREATE OR REPLACE VIEW vw_revenue_summary AS SELECT vehicle_type, COUNT(*) AS total_tickets_issued, SUM(CASE WHEN is_active=0 THEN 1 ELSE 0 END) AS completed_checkouts, SUM(CASE WHEN is_active=1 THEN 1 ELSE 0 END) AS currently_parked, ROUND(SUM(fee_charged), 2) AS total_revenue FROM tickets GROUP BY vehicle_type;");
+            } else {
+                stmt.execute("CREATE VIEW IF NOT EXISTS vw_revenue_summary AS SELECT vehicle_type, COUNT(*) AS total_tickets_issued, SUM(CASE WHEN is_active=0 THEN 1 ELSE 0 END) AS completed_checkouts, SUM(CASE WHEN is_active=1 THEN 1 ELSE 0 END) AS currently_parked, ROUND(SUM(fee_charged), 2) AS total_revenue FROM tickets GROUP BY vehicle_type;");
+            }
 
             ResultSet rs = stmt.executeQuery("SELECT COUNT(*) FROM parking_slots;");
             if (rs.next() && rs.getInt(1) == 0) {
@@ -72,7 +127,7 @@ public class DatabaseManager {
     }
 
     public void saveVehicle(Vehicle vehicle, Connection conn) throws SQLException {
-        String sql = "INSERT OR REPLACE INTO vehicles (plate_number, owner_name, vehicle_type) VALUES (?, ?, ?);";
+        String sql = "REPLACE INTO vehicles (plate_number, owner_name, vehicle_type) VALUES (?, ?, ?);";
         try (PreparedStatement stmt = conn.prepareStatement(sql)) {
             stmt.setString(1, vehicle.getPlateNumber());
             stmt.setString(2, vehicle.getOwnerName());
@@ -155,15 +210,17 @@ public class DatabaseManager {
     }
 
     public int getNextTicketSequence() {
-        String sql = "SELECT MAX(CAST(SUBSTR(ticket_id, 5) AS INTEGER)) FROM tickets;";
+        String sql = "SELECT MAX(ticket_id) FROM tickets;";
         try (Connection conn = getConnection();
              Statement stmt = conn.createStatement();
              ResultSet rs = stmt.executeQuery(sql)) {
             if (rs.next()) {
-                int max = rs.getInt(1);
-                if (max > 0) return max + 1;
+                String maxId = rs.getString(1);
+                if (maxId != null && maxId.startsWith("TKT-")) {
+                    return Integer.parseInt(maxId.substring(4)) + 1;
+                }
             }
-        } catch (SQLException ignored) {}
+        } catch (Exception ignored) {}
         return 1001;
     }
 

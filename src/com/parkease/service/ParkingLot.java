@@ -65,7 +65,7 @@ public class ParkingLot {
         try (Connection conn = dbManager.getConnection();
              Statement stmt = conn.createStatement()) {
 
-            stmt.executeUpdate("UPDATE tickets SET is_active = 0 WHERE is_active = 1 AND ticket_id NOT IN (SELECT current_ticket_id FROM parking_slots WHERE is_occupied = 1)");
+            stmt.executeUpdate("UPDATE tickets SET is_active = 0 WHERE is_active = 1 AND ticket_id NOT IN (SELECT current_ticket_id FROM parking_slots WHERE is_occupied = 1 AND current_ticket_id IS NOT NULL)");
 
             try (ResultSet rs = stmt.executeQuery("SELECT vehicle_type, COUNT(*), SUM(fee_charged) FROM tickets WHERE is_active = 0 GROUP BY vehicle_type")) {
                 while (rs.next()) {

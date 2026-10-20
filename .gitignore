@@ -2,6 +2,9 @@
 bin/
 *.class
 
+# Database configuration & credentials (DO NOT COMMIT)
+db.properties
+
 # Temporary and log files
 *.log
 .DS_Store

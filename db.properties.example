@@ -1,0 +1,13 @@
+# ParkEase Database Configuration
+# Options for db.type: MYSQL or SQLITE
+db.type=MYSQL
+
+# MySQL Connection Details
+db.mysql.host=localhost
+db.mysql.port=3306
+db.mysql.name=parkease
+db.mysql.user=root
+db.mysql.password=YOUR_PASSWORD_HERE
+
+# SQLite Connection Details (Fallback)
+db.sqlite.file=parkease.db
